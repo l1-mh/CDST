@@ -74,7 +74,9 @@ python cdst.py run -i sample_cds/*.ffn -o output/ -T both
 ### Merge Databases:
 
 Can do with only JSON databases. But merging JSON databases with Distance Matrixes (with --matrix flag) will save you time.
+
 Use --mst flag if you want to produce the MST.
+
 Make sure that every corresponding Distance Matrix file are in the same folder with JSON database and the file names are as below:
 - /dir1/md5_hashes.json
 - /dir1/comparison_matrix.csv
