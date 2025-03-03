@@ -1,12 +1,14 @@
 # CDST
+
 CoDing Sequence Typer (CDST) is a simple, efficient, decentralized, and easily shareable genome typing and clustering method similar to cg/wgMLST, based on MD5 hash mapping of coding sequences (CDS) from genome assemblies.
 
 ----------------------------------------------------
-DEPENDENCIES
-----------------------------------------------------
+## DEPENDENCIES
+
 Before running CDST, ensure that the following dependencies are installed:
 
 Python Packages:
+
 - argparse
 - hashlib
 - json
@@ -16,46 +18,75 @@ Python Packages:
 - scipy
 
 Install them using:
-$ pip install biopython pandas networkx scipy
+```
+pip install biopython pandas networkx scipy
+```
 
-----------------------------------------------------
-INSTALLATION
+## INSTALLATION
 ----------------------------------------------------
 Clone this repository and navigate into the project folder:
-$ git clone https://github.com/l1-mh/cdst.git
-$ cd cdst
+```
+git clone https://github.com/l1-mh/cdst.git
+cd cdst
+```
 
 Make the script executable:
-$ chmod +x cdst.py
+```
+chmod +x cdst.py
+```
 
 Alternatively, you can run it directly using Python:
-$ python cdst.py --help
+```
+python cdst.py --help
+```
 
-----------------------------------------------------
-USAGE
+## USAGE
 ----------------------------------------------------
 CDST provides multiple subcommands for different analysis steps.
 
-1. Generate MD5 Hashes from FASTA Files:
-$ python cdst.py generate -i sample1.ffn sample2.ffn -o output/
+### Generate the Distance Matrix, MST, and Hierarchical Clusters from CDS Sequences:
+
+1. Generate JSON database of MD5 Hashes from FASTA Files:
+```
+python cdst.py generate -i sample1.ffn sample2.ffn -o output/
+```
 
 2. Compute Genetic Distance Matrices:
-$ python cdst.py matrix -j output/md5_hashes.json -o output/
+```
+python cdst.py matrix -j output/md5_hashes.json -o output/
+```
 
 3. Generate Minimum Spanning Tree (MST):
-$ python cdst.py mst -m output/difference_matrix.csv -o output/
+```
+python cdst.py mst -m output/difference_matrix.csv -o output/
+```
 
-4. Generate Hierarchical Clustering Tree:
-$ python cdst.py hc -m output/difference_matrix.csv -o output/
+4. (Optional) Generate Hierarchical Clustering Tree:
+```
+python cdst.py hc -m output/difference_matrix.csv -o output/
+```
 
-Run the Full Pipeline Above:
-$ python cdst.py run -i sample1.ffn sample2.ffn -o output/ -T both
+### Or Run the Full Pipeline Above:
+```
+python cdst.py run -i sample1.ffn sample2.ffn -o output/ -T both
+```
 
-Merge Databases:
-$ python cdst.py join -d dir1/ dir2/ -o merged_output/ --matrix --mst
+### Merge Databases:
 
-Compare New Samples Against an Existing Dataset:
-$ python cdst.py test -i new_sample.ffn -j output/md5_hashes.json -o output/
+Can do with only JSON databases. But merging JSON databases with Distance Matrixes and MSTs will save you time.
+Make sure that every corresponding Distance Matrixe and MST file are in the same folder with JSON database and the file names are as below:
+- /dir1/md5_hashes.json
+- /dir1/comparison_matrix.csv
+- /dir1/mst.csv
+```
+python cdst.py join -d dir1/ dir2/ -o merged_output/ --matrix --mst
+```
+
+### Compare New Samples Against an Existing Dataset:
+
+```
+python cdst.py test -i new_sample.ffn -j output/md5_hashes.json -o output/
+```
 
 ----------------------------------------------------
 OUTPUT FILES
