@@ -23,7 +23,7 @@ pip install biopython pandas networkx scipy
 ```
 
 ## INSTALLATION
-----------------------------------------------------
+
 Clone this repository and navigate into the project folder:
 ```
 git clone https://github.com/l1-mh/cdst.git
@@ -41,7 +41,7 @@ python cdst.py --help
 ```
 
 ## USAGE
-----------------------------------------------------
+
 CDST provides multiple subcommands for different analysis steps.
 
 ### Generate the Distance Matrix, MST, and Hierarchical Clusters from CDS Sequences:
@@ -90,9 +90,34 @@ python cdst.py join -d dir1/ dir2/ -o merged_output/ --matrix --mst
 python cdst.py test -i new_samples/*.ffn -j output/md5_hashes.json -o output/
 ```
 
-----------------------------------------------------
-OUTPUT FILES
-----------------------------------------------------
+## INPUT FILES
+
+CDST requires FASTA-formatted CDS sequences as input. Each sequence should be in standard FASTA format (also known as .FFN format), such as:
+```
+>gene1
+ATGCGTACGTAGCTAGCTAG
+>gene2
+ATGCGTAGCTAGCTAGTACG
+```
+
+### Predicting CDS from Genome Assemblies
+
+If you have a genome assembly (FASTA format), you need to predict CDS sequences before using CDST. We recommend Prodigal, a widely used gene prediction tool for prokaryotic genomes. 
+
+Run the following command to predict CDS from an assembly file:
+```
+prodigal -i assembly.fasta -d cds_output.ff
+```
+The resulting cds_output.ffn file can be directly used as input for CDST.
+
+- You may use other CDS prediction tools like Glimmer or Augustus, but ensure consistency across samples.
+
+- If your dataset already contains FASTA-formatted CDS, no additional processing is needed.
+
+- CDS sequences containing ambiguous characters (e.g., N) will be ignored by CDST.
+
+## OUTPUT FILES
+
 Depending on the commands used, the following files will be generated:
 - md5_hashes.json → Stores MD5 hashes for CDS sequences.
 - comparison_matrix.csv → Number of shared hashes between samples.
