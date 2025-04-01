@@ -1,184 +1,188 @@
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.metrics import silhouette_score, adjusted_mutual_info_score
 from sklearn.cluster import AgglomerativeClustering
 import matplotlib.pyplot as plt
 from matplotlib.colors import TwoSlopeNorm
-import argparse
-import os
 from joblib import Parallel, delayed
+import argparse
 import logging
 import time
 
-# === Configure logging system ===
+
+# --------------------------- Logging Configuration ---------------------------
 logging.basicConfig(
     format="%(asctime)s - %(message)s",
     level=logging.INFO,
     datefmt="%H:%M:%S"
 )
 
-# === MI computation task (parallelizable) ===
+# --------------------------- Utility Functions ---------------------------
+
+def load_distance_matrix(file_path):
+    matrix = pd.read_csv(file_path, index_col=0)
+    matrix = np.minimum(matrix, matrix.T)
+    np.fill_diagonal(matrix.values, 0)
+    return matrix
+
+
 def compute_mi(i, j, labels_list):
     if i == j:
         return i, j, 1.0
-    else:
-        mi = adjusted_mutual_info_score(labels_list[i], labels_list[j])
-        return i, j, mi
+    mi = adjusted_mutual_info_score(labels_list[i], labels_list[j])
+    return i, j, mi
 
 
-def analyze_clustering(input_file, output_dir, step_size, mode, threads):
-    # === Load distance matrix ===
-    distance_matrix = pd.read_csv(input_file, index_col=0)
+def save_dataframe(df, output_path, name):
+    path = output_path / name
+    df.to_csv(path, index=False)
+    logging.info(f"{name} saved to: {path}")
 
-    # Make matrix symmetric by keeping the minimum value
-    distance_matrix = np.minimum(distance_matrix, distance_matrix.T)
 
-    # Set diagonal to 0
-    np.fill_diagonal(distance_matrix.values, 0)
-
-    os.makedirs(output_dir, exist_ok=True)
-
+def run_clustering(matrix, mode, step, start, end):
     labels_list = []
-    thresholds = []
-    silhouette_scores = []
+    scores = []
 
-    # === Perform hierarchical clustering by distance or by number of clusters ===
     if mode == 'dist':
-        max_distance = np.max(distance_matrix.values)
-        thresholds = np.arange(0, max_distance + step_size, step_size)
+        max_dist = np.max(matrix.values)
+        start = 0 if start is None else start
+        end = max_dist if end is None else end
+        thresholds = np.arange(start, end + step, step)
 
-        logging.info(f"Max distance: {max_distance:.3f}, Step size: {step_size:.3f}")
+        logging.info(f"Running clustering by distance from {start} to {end} (step {step})")
 
         for threshold in thresholds:
-            clustering = AgglomerativeClustering(
-                n_clusters=None,
-                metric='precomputed',
-                linkage='average',
-                distance_threshold=threshold
-            )
-            labels = clustering.fit_predict(distance_matrix)
+            model = AgglomerativeClustering(n_clusters=None, metric='precomputed',
+                                            linkage='average', distance_threshold=threshold)
+            labels = model.fit_predict(matrix)
             labels_list.append(labels)
 
-            num_clusters = len(set(labels))
-            if num_clusters == 1:
+            n_clusters = len(set(labels))
+            if n_clusters == 1:
                 logging.info(f"All samples merged at threshold = {threshold:.3f}")
                 break
 
-            if 2 <= num_clusters <= len(distance_matrix) - 1:
-                score = silhouette_score(distance_matrix, labels, metric='precomputed')
-                silhouette_scores.append([threshold, score])
-                logging.info(f"Threshold: {threshold:.3f}, Silhouette Score: {score:.3f}")
-            else:
-                silhouette_scores.append([threshold, None])
+            score = silhouette_score(matrix, labels, metric='precomputed') if 2 <= n_clusters <= len(matrix) - 1 else None
+            scores.append([threshold, score, n_clusters])
+            logging.info(f"Threshold: {threshold:.3f}, Silhouette Score: {score}, Clusters: {n_clusters}")
 
-    elif mode == 'nclust':
-        min_clusters = 2
-        max_clusters = len(distance_matrix)
-        thresholds = list(range(min_clusters, max_clusters + 1, int(step_size)))
+    else:
+        max_clusters = len(matrix)
+        start = 2 if start is None else int(start)
+        end = max_clusters if end is None else int(end)
+        thresholds = list(range(start, end + 1, int(step)))
 
-        logging.info(f"Clustering from {min_clusters} to {max_clusters} clusters with step size = {step_size}")
+        logging.info(f"Running clustering by number of clusters from {start} to {end} (step {step})")
 
         for n_clusters in thresholds:
-            clustering = AgglomerativeClustering(
-                n_clusters=n_clusters,
-                metric='precomputed',
-                linkage='average'
-            )
-            labels = clustering.fit_predict(distance_matrix)
+            model = AgglomerativeClustering(n_clusters=n_clusters, metric='precomputed', linkage='average')
+            labels = model.fit_predict(matrix)
             labels_list.append(labels)
 
-            num_clusters = len(set(labels))
-            if num_clusters == 1:
-                logging.info(f"All samples merged at {n_clusters} clusters.")
-                break
+            score = silhouette_score(matrix, labels, metric='precomputed') if 2 <= n_clusters <= len(matrix) - 1 else None
+            scores.append([n_clusters, score, np.nan])
+            logging.info(f"Clusters: {n_clusters}, Silhouette Score: {score}")
 
-            if 2 <= num_clusters <= len(distance_matrix) - 1:
-                score = silhouette_score(distance_matrix, labels, metric='precomputed')
-                silhouette_scores.append([n_clusters, score])
-                logging.info(f"Clusters: {n_clusters}, Silhouette Score: {score:.3f}")
-            else:
-                silhouette_scores.append([n_clusters, None])
-    else:
-        raise ValueError("Invalid mode: Use 'dist' or 'nclust'")
+    return labels_list, scores, thresholds[:len(labels_list)]
 
-    # Adjust threshold list to match number of clustering results
-    thresholds = thresholds[:len(labels_list)]
 
-    # === Save silhouette score results ===
-    silhouette_df = pd.DataFrame(silhouette_scores, columns=["Threshold/Clusters", "Silhouette Score"])
-    silhouette_file = os.path.join(output_dir, "silhouette_scores.csv")
-    silhouette_df.to_csv(silhouette_file, index=False)
-    logging.info(f"Silhouette scores saved to: {silhouette_file}")
+def plot_silhouette(scores_df, mode, output_path, img_format):
+    x = scores_df.iloc[:, 0]
+    sil = scores_df["Silhouette Score"]
+    aux = scores_df.iloc[:, 2]
 
-    # === Plot silhouette score line chart ===
-    plt.figure(figsize=(8, 6))
-    plt.plot(
-        silhouette_df["Threshold/Clusters"],
-        silhouette_df["Silhouette Score"],
-        linestyle='-',  # Line only, no data markers
-        color='blue'
-    )
-    plt.title(f"Silhouette Score vs. {'Distance Threshold' if mode == 'dist' else 'Number of Clusters'}")
-    plt.xlabel("Threshold/Clusters")
-    plt.ylabel("Silhouette Score")
+    fig, ax1 = plt.subplots(figsize=(8, 6))
+    ax1.plot(x, sil, color='blue')
+    ax1.set_xlabel(scores_df.columns[0])
+    ax1.set_ylabel("Silhouette Score", color='blue')
+    ax1.tick_params(axis='y', labelcolor='blue')
+
+    ax2 = ax1.twinx()
+    ax2.plot(x, aux, linestyle='--', color='red')
+    ax2.set_ylabel(scores_df.columns[2], color='red')
+    ax2.tick_params(axis='y', labelcolor='red')
+
+    plt.title("Silhouette Score and " + scores_df.columns[2])
     plt.grid(True)
-    plt.savefig(os.path.join(output_dir, "silhouette_plot.png"))
-    logging.info(f"Silhouette plot saved to: silhouette_plot.png")
+    plt.tight_layout()
+    plt.savefig(output_path / f"silhouette_plot.{img_format}", format=img_format)
+    logging.info(f"Silhouette plot saved as {img_format}.")
 
-    # === Compute mutual information matrix ===
+
+def compute_mi_matrix(labels_list, threads, thresholds, output_path, img_format):
     n = len(labels_list)
-    logging.info("Starting MI calculation...")
-    start_time = time.time()
+    logging.info("Starting Mutual Information matrix calculation...")
 
+    start = time.time()
     results = Parallel(n_jobs=threads, batch_size=1)(
         delayed(compute_mi)(i, j, labels_list)
         for i in range(n) for j in range(i, n)
     )
+    elapsed = time.time() - start
+    logging.info(f"MI calculation completed in {elapsed:.2f} seconds.")
 
-    elapsed_time = time.time() - start_time
-    logging.info(f"MI calculation completed in {elapsed_time:.2f} seconds.")
-
-    # === Build MI matrix from results ===
     mi_matrix = np.zeros((n, n))
-    for i, j, mi in results:
-        mi_matrix[i][j] = mi_matrix[j][i] = mi
+    for i, j, val in results:
+        mi_matrix[i][j] = mi_matrix[j][i] = val
 
-    mi_matrix_df = pd.DataFrame(mi_matrix, index=thresholds, columns=thresholds)
-    mi_matrix_file = os.path.join(output_dir, "mi_matrix.csv")
-    mi_matrix_df.to_csv(mi_matrix_file)
-    logging.info(f"Mutual Information matrix saved to: {mi_matrix_file}")
+    df = pd.DataFrame(mi_matrix, index=thresholds, columns=thresholds)
+    df.to_csv(output_path / "mi_matrix.csv")
+    logging.info("MI matrix saved.")
 
-    # === Plot MI heatmap with color midpoint at 0.9 and ticks at 0.1 intervals ===
     plt.figure(figsize=(10, 8))
     norm = TwoSlopeNorm(vmin=0, vcenter=0.9, vmax=1)
-
     im = plt.imshow(mi_matrix, cmap='coolwarm', interpolation='nearest', norm=norm)
     cbar = plt.colorbar(im)
     cbar.set_ticks(np.arange(0, 1.1, 0.1))
-    cbar.set_label('Adjusted Mutual Information')
+    cbar.set_label("Adjusted Mutual Information")
 
-    plt.title(f'Mutual Information Matrix ({mode})')
-
-    # Show only 5 evenly spaced ticks on axes
-    num_ticks = 5
-    x_ticks = np.linspace(0, len(thresholds) - 1, num_ticks).astype(int)
-    x_labels = [f'{thresholds[i]:.2f}' for i in x_ticks]
-
-    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=45)
-    plt.yticks(ticks=x_ticks, labels=x_labels)
-
+    ticks = np.linspace(0, len(thresholds) - 1, 5).astype(int)
+    tick_labels = [f'{thresholds[i]:.2f}' for i in ticks]
+    plt.xticks(ticks, tick_labels, rotation=45)
+    plt.yticks(ticks, tick_labels)
+    plt.title("Mutual Information Matrix")
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "mi_matrix.png"))
-    logging.info(f"Mutual Information plot saved to: mi_matrix.png")
+    plt.savefig(output_path / f"mi_matrix.{img_format}", format=img_format)
+    logging.info(f"Mutual Information heatmap saved as {img_format}.")
 
+
+# --------------------------- Main Function ---------------------------
+
+def main(args):
+    output_path = Path(args.output)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    matrix = load_distance_matrix(args.input)
+    labels_list, scores, thresholds = run_clustering(matrix, args.mode, args.step, args.start, args.end)
+
+    col_names = ["Threshold" if args.mode == 'dist' else "Clusters",
+                 "Silhouette Score",
+                 "Clusters" if args.mode == 'dist' else "Distance"]
+
+    scores_df = pd.DataFrame(scores, columns=col_names)
+    save_dataframe(scores_df, output_path, "silhouette_scores.csv")
+    plot_silhouette(scores_df, args.mode, output_path, args.format)
+
+    if args.mi:
+        compute_mi_matrix(labels_list, args.threads, thresholds, output_path, args.format)
+
+
+# --------------------------- CLI ---------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Analyze clustering consistency using Silhouette and Mutual Information.")
-    parser.add_argument('-i', '--input', type=str, required=True, help="Input distance matrix file (CSV)")
-    parser.add_argument('-o', '--output', type=str, required=True, help="Output directory for results")
-    parser.add_argument('-s', '--step', type=float, default=1.0, help="Step size for thresholds or cluster counts")
-    parser.add_argument('-m', '--mode', type=str, choices=['dist', 'nclust'], required=True, help="Clustering mode: 'dist' or 'nclust'")
-    parser.add_argument('-t', '--threads', type=int, default=-1, help="Number of parallel threads to use")
+    parser = argparse.ArgumentParser(description="Clustering evaluation using silhouette and mutual information.")
+    parser.add_argument("-i", "--input", required=True, help="Distance matrix (CSV)")
+    parser.add_argument("-o", "--output", required=True, help="Output directory")
+    parser.add_argument("-s", "--step", type=float, default=1.0, help="Step size")
+    parser.add_argument("-m", "--mode", choices=["dist", "nclust"], required=True, help="Clustering mode")
+    parser.add_argument("-t", "--threads", type=int, default=-1, help="Threads for MI computation")
+    parser.add_argument("--start", type=float, help="Start value")
+    parser.add_argument("--end", type=float, help="End value")
+    parser.add_argument("-M", "--mi", action="store_true", help="If set, compute Mutual Information matrix")
+    parser.add_argument("--format", type=str, default="jpg", choices=["jpg", "png", "tif", "pdf", "svg"],
+                        help="Image format for output plots (default: jpg)")
 
     args = parser.parse_args()
-    analyze_clustering(args.input, args.output, args.step, args.mode, args.threads)
+    main(args)
+
