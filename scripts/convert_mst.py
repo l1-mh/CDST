@@ -3,6 +3,26 @@ import numpy as np
 from collections import defaultdict
 import argparse
 import os
+import networkx as nx
+
+
+def validate_mst(mst_df):
+    """
+    Validate if the input MST file is a valid MST.
+    The MST must be a connected graph without any cycles.
+    """
+    G = nx.Graph()
+
+    for _, row in mst_df.iterrows():
+        G.add_edge(row['Source'], row['Target'], weight=row['Distance'])
+
+    if not nx.is_connected(G):
+        raise ValueError("The input MST is not a connected graph.")
+    
+    if G.number_of_edges() != G.number_of_nodes() - 1:
+        raise ValueError("The input MST contains cycles or disconnected components.")
+    
+    print("The input MST is valid.")
 
 
 def merge_by_category(mst, classification, epsilon):
@@ -57,29 +77,45 @@ def read_classification_file(classification_file):
 
 
 def main(args):
-    mst = pd.read_csv(args.input)
-    classification = read_classification_file(args.classification)
-
-    epsilon = args.epsilon
-
-    edge_df, node_df = merge_by_category(mst, classification, epsilon)
-
-    os.makedirs(args.output, exist_ok=True)
+    # Read MST file
+    try:
+        mst = pd.read_csv(args.input)
+    except Exception as e:
+        raise ValueError(f"Failed to read the input file: {e}")
     
-    edge_output = os.path.join(args.output, 'merged_edges.csv')
-    node_output = os.path.join(args.output, 'category_nodes.csv')
+    if not set(['Source', 'Target', 'Distance']).issubset(mst.columns):
+        raise ValueError("Input file must have columns: Source, Target, Distance")
 
-    edge_df.to_csv(edge_output, index=False)
-    node_df.to_csv(node_output, index=False)
+    # Validate the input MST
+    validate_mst(mst)
 
-    print(f"Merged edges saved to: {edge_output}")
-    print(f"Category nodes saved to: {node_output}")
+    # Read classification file if provided
+    if args.classification:
+        classification = read_classification_file(args.classification)
+        edge_df, node_df = merge_by_category(mst, classification, args.epsilon)
+        
+        os.makedirs(args.output, exist_ok=True)
+        
+        edge_output = os.path.join(args.output, 'merged_edges.csv')
+        node_output = os.path.join(args.output, 'category_nodes.csv')
+
+        edge_df.to_csv(edge_output, index=False)
+        node_df.to_csv(node_output, index=False)
+
+        print(f"Merged edges saved to: {edge_output}")
+        print(f"Category nodes saved to: {node_output}")
+    else:
+        # If no classification file, just save the original MST with weights
+        mst['Weight'] = 1 / (mst['Distance'] + args.epsilon)
+        mst_output = os.path.join(args.output, 'edges_with_weights.csv')
+        mst.to_csv(mst_output, index=False)
+        print(f"Edges with weights saved to: {mst_output}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Merge MST edges by category and output node counts")
+    parser = argparse.ArgumentParser(description="Validate and merge MST by category")
     parser.add_argument('-i', '--input', required=True, help="Input MST CSV file")
-    parser.add_argument('-c', '--classification', required=True, help="Classification file")
+    parser.add_argument('-c', '--classification', help="Optional classification file")
     parser.add_argument('-o', '--output', required=True, help="Output folder for results")
     parser.add_argument('-e', '--epsilon', type=float, default=0.001, help="Small value to avoid division by zero")
 
