@@ -14,7 +14,7 @@ def validate_mst(mst_df):
     G = nx.Graph()
 
     for _, row in mst_df.iterrows():
-        G.add_edge(row['Source'], row['Target'], weight=row['Distance'])
+        G.add_edge(row['Node1'], row['Node2'], weight=row['Distance'])
 
     if not nx.is_connected(G):
         raise ValueError("The input MST is not a connected graph.")
@@ -31,7 +31,7 @@ def merge_by_category(mst, classification, epsilon):
     category_nodes = defaultdict(set)
 
     for _, row in mst.iterrows():
-        source, target, distance = row['Source'], row['Target'], row['Distance']
+        source, target, distance = row['Node1'], row['Node2'], row['Distance']
         cat1 = classification.get(source, 'Unknown')
         cat2 = classification.get(target, 'Unknown')
 
@@ -54,14 +54,14 @@ def merge_by_category(mst, classification, epsilon):
         weight = 1 / (avg_distance + epsilon)
         edge_result.append([cat1, cat2, avg_distance, num_connections, weight])
 
-    edge_df = pd.DataFrame(edge_result, columns=['Source_Category', 'Target_Category', 'Average_Distance', 'Num_Connections', 'Weight'])
+    edge_df = pd.DataFrame(edge_result, columns=['Source', 'Target', 'Distance', 'Num_Connections', 'Weight'])
 
     # Create category nodes list
     node_result = []
     for category, nodes in category_nodes.items():
         node_result.append([category, len(nodes)])
 
-    node_df = pd.DataFrame(node_result, columns=['Category', 'Num_Nodes'])
+    node_df = pd.DataFrame(node_result, columns=['ID', 'Num_Node'])
 
     return edge_df, node_df
 
@@ -83,8 +83,12 @@ def main(args):
     except Exception as e:
         raise ValueError(f"Failed to read the input file: {e}")
     
-    if not set(['Source', 'Target', 'Distance']).issubset(mst.columns):
-        raise ValueError("Input file must have columns: Source, Target, Distance")
+    # If no columns provided, assume the first three columns are Node1, Node2, Distance
+    if not set(['Node1', 'Node2', 'Distance']).issubset(mst.columns):
+        if len(mst.columns) >= 3:
+            mst.columns = ['Node1', 'Node2', 'Distance']
+        else:
+            raise ValueError("Input file must have at least three columns for Node1, Node2, and Distance.")
 
     # Validate the input MST
     validate_mst(mst)
