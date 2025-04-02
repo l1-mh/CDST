@@ -1,94 +1,118 @@
 import pandas as pd
+import numpy as np
 import networkx as nx
+from collections import defaultdict
 import argparse
+import os
 
-def validate_mst(edges):
-    """
-    Validate if the given edge list forms a valid Minimum Spanning Tree (MST).
-    """
-    # Create an undirected graph
+
+def load_mst(file):
+    mst = pd.read_csv(file)
+    if len(mst.columns) < 3:
+        raise ValueError("The input MST file must have at least 3 columns: Source, Target, Weight")
+    mst.columns = ['Source', 'Target', 'Weight']
+    return mst
+
+
+def load_classification(file):
+    classification = pd.read_csv(file)
+    if len(classification.columns) < 2:
+        raise ValueError("The classification file must have at least 2 columns: Sample, Category")
+    classification.columns = ['Sample', 'Category']
+    return classification.set_index('Sample').to_dict()['Category']
+
+
+def validate_mst(mst):
     G = nx.Graph()
-    G.add_weighted_edges_from(edges)
-
-    # Check if the graph is connected
-    if not nx.is_connected(G):
-        print("The graph is NOT connected. Therefore, it is NOT a valid MST.")
-        return False
-
-    # Check if there are any cycles
-    try:
-        cycle = nx.find_cycle(G)
-        print(f"The graph contains a cycle: {cycle}. Therefore, it is NOT a valid MST.")
-        return False
-    except nx.exception.NetworkXNoCycle:
-        pass  # No cycle found
-
-    # Check the number of edges
-    num_nodes = len(G.nodes)
-    num_edges = len(G.edges)
-
-    if num_edges != num_nodes - 1:
-        print(f"The graph has {num_nodes} nodes and {num_edges} edges, which is incorrect for a valid MST.")
-        return False
-
-    print("The graph is a valid MST.")
-    return True
+    G.add_weighted_edges_from(mst.values)
+    if not nx.is_tree(G):
+        raise ValueError("The input MST is not valid. The input graph is not a tree.")
 
 
-def convert_to_cytoscape_format(input_file, output_file, epsilon=0.0001, source_col=None, target_col=None, weight_col=None):
-    """
-    Convert the MST file to Cytoscape-compatible format by adjusting edge weights.
-    """
-    # Load the original MST CSV file
-    df = pd.read_csv(input_file)
+def merge_by_category(mst, classification, epsilon):
+    category_edges = defaultdict(list)
+    category_counts = defaultdict(lambda: defaultdict(int))
 
-    # If user hasn't specified columns, assume the first three columns are used
-    if source_col is None or target_col is None or weight_col is None:
-        if df.shape[1] < 3:
-            raise ValueError("Input file must have at least three columns.")
-        
-        # Automatically detect the first three columns as Source, Target, Weight
-        source_col, target_col, weight_col = df.columns[:3]
-        print(f"Auto-detected columns: Source = {source_col}, Target = {target_col}, Weight = {weight_col}")
+    for _, row in mst.iterrows():
+        source, target, weight = row['Source'], row['Target'], row['Weight']
+        cat1 = classification.get(source, 'Unknown')
+        cat2 = classification.get(target, 'Unknown')
 
-    # Check if the specified columns exist
-    if not all(col in df.columns for col in [source_col, target_col, weight_col]):
-        raise ValueError(f"Columns {source_col}, {target_col}, {weight_col} not found in the input file.")
+        if cat1 == 'Unknown' or cat2 == 'Unknown':
+            continue  # Skip if the category is not found
 
-    # Extract necessary columns
-    df = df[[source_col, target_col, weight_col]]
-    df.columns = ['Source', 'Target', 'Weight']
+        if cat1 != cat2:
+            sorted_pair = tuple(sorted([cat1, cat2]))
+            category_edges[sorted_pair].append(weight)
+            category_counts[cat1][cat2] += 1
+            category_counts[cat2][cat1] += 1
 
-    # Convert weight to float
-    df['Weight'] = df['Weight'].astype(float)
-    
-    # Generate the edge list for MST validation
-    edges = list(zip(df['Source'], df['Target'], df['Weight']))
-    
-    # Validate the MST
-    if not validate_mst(edges):
-        print("MST validation failed. Exiting the program.")
-        return
+    result = []
 
-    # Adjust edge weights for Cytoscape compatibility
-    df['Adjusted_Weight'] = 1 / (df['Weight'] + epsilon)
-    df = df[['Source', 'Target', 'Adjusted_Weight']]
-    df.columns = ['Source', 'Target', 'Weight']
+    for (cat1, cat2), weights in category_edges.items():
+        avg_distance = np.mean(weights)
+        num_connections = len(weights)
+        weight = 1 / (avg_distance + epsilon)
+        result.append([cat1, cat2, avg_distance, num_connections, weight])
 
-    # Save to Cytoscape-compatible file
-    df.to_csv(output_file, index=False)
-    print(f"Successfully saved as {output_file}")
+    result_df = pd.DataFrame(result, columns=['Source_Category', 'Target_Category', 'Average_Distance', 'Num_Connections', 'Weight'])
+    return result_df
+
+
+def process_mst(mst, classification, epsilon):
+    if classification:
+        result_df = merge_by_category(mst, classification, epsilon)
+
+        # Check if the merged result is a valid MST
+        G = nx.Graph()
+        for _, row in result_df.iterrows():
+            G.add_edge(row['Source_Category'], row['Target_Category'], weight=row['Average_Distance'])
+
+        if not nx.is_tree(G):
+            mst_tree = nx.minimum_spanning_tree(G, weight='weight')
+            edges = list(mst_tree.edges(data=True))
+            result = []
+
+            for edge in edges:
+                source, target, data = edge
+                avg_distance = data['weight']
+                weight = 1 / (avg_distance + epsilon)
+                result.append([source, target, avg_distance, 1, weight])
+
+            result_df = pd.DataFrame(result, columns=['Source_Category', 'Target_Category', 'Average_Distance', 'Num_Connections', 'Weight'])
+            print("Merged result was not a valid MST. Converted to MST using NetworkX.")
+
+    else:
+        # Calculate weight and include in output file
+        mst['Weight'] = 1 / (mst['Weight'] + epsilon)
+        result_df = mst[['Source', 'Target', 'Weight']].copy()
+        result_df['Distance'] = mst['Weight']
+        result_df = result_df[['Source', 'Target', 'Distance', 'Weight']]
+
+    return result_df
+
+
+def main(args):
+    mst = load_mst(args.input)
+    validate_mst(mst)
+
+    classification = load_classification(args.classification) if args.classification else None
+
+    result_df = process_mst(mst, classification, args.epsilon)
+    result_df.to_csv(args.output, index=False)
+
+    if args.classification:
+        print(f"Category-merged output saved to {args.output}")
+    else:
+        print(f"Original MST output saved to {args.output} with calculated weights.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Validate MST and Convert to Cytoscape-compatible format.")
-    parser.add_argument("-i", "--input", required=True, help="Input MST CSV file (e.g., mst.csv)")
-    parser.add_argument("-o", "--output", required=True, help="Output file name (e.g., cytoscape_network.csv)")
-    parser.add_argument("-e", "--epsilon", type=float, default=0.0001, help="Small value to prevent division by zero (default: 0.0001)")
-    parser.add_argument("--source_col", type=str, help="Name of the source column (default: first column)")
-    parser.add_argument("--target_col", type=str, help="Name of the target column (default: second column)")
-    parser.add_argument("--weight_col", type=str, help="Name of the weight column (default: third column)")
+    parser = argparse.ArgumentParser(description="Process and merge MST by category, if provided.")
+    parser.add_argument('-i', '--input', required=True, help="Input MST file (CSV format)")
+    parser.add_argument('-o', '--output', required=True, help="Output file (CSV format)")
+    parser.add_argument('-c', '--classification', help="Classification file (CSV format, with columns: Sample, Category)")
+    parser.add_argument('-e', '--epsilon', type=float, default=0.001, help="Small epsilon value to avoid zero division (default: 0.001)")
 
     args = parser.parse_args()
-
-    convert_to_cytoscape_format(args.input, args.output, args.epsilon, args.source_col, args.target_col, args.weight_col)
+    main(args)
