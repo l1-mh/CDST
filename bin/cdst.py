@@ -43,24 +43,45 @@ def generate_comparison_matrix(md5_dict, verbose=False):
     return pd.DataFrame(matrix, index=files, columns=files)
 
 
-
 def calculate_difference_matrix(comparison_matrix):
     diff_matrix = comparison_matrix.copy().astype(float)  
     for index, row in comparison_matrix.iterrows():
         self_comparison_value = row[index]
         diff_matrix.loc[index] = (self_comparison_value - row) / self_comparison_value
+
+## Added in v0.1.1
+    for i in range(len(diff_matrix)):
+        for j in range(i + 1, len(diff_matrix)):
+            min_val = min(diff_matrix.iloc[i, j], diff_matrix.iloc[j, i])
+            diff_matrix.iloc[i, j] = diff_matrix.iloc[j, i] = min_val
+##
     return diff_matrix
 
 
+## Revised in v0.1.1 
+#def generate_edge_list(diff_matrix):
+#    edge_list = []
+#    samples = diff_matrix.index
+#    for i, sample1 in enumerate(samples):
+#        for j, sample2 in enumerate(samples):
+#            if i < j:
+#                distance = min(diff_matrix.loc[sample1, sample2], diff_matrix.loc[sample2, sample1])
+#                edge_list.append((sample1, sample2, distance))
+#    return edge_list
+##
 def generate_edge_list(diff_matrix):
     edge_list = []
     samples = diff_matrix.index
-    for i, sample1 in enumerate(samples):
-        for j, sample2 in enumerate(samples):
-            if i < j:
-                distance = min(diff_matrix.loc[sample1, sample2], diff_matrix.loc[sample2, sample1])
-                edge_list.append((sample1, sample2, distance))
+    for i in range(len(samples)):
+        for j in range(i + 1, len(samples)):
+            sample1 = samples[i]
+            sample2 = samples[j]
+            distance = diff_matrix.loc[sample1, sample2]
+            edge_list.append((sample1, sample2, distance))
     return edge_list
+##
+
+
 
 def generate_mst(edge_list):
     G = nx.Graph()
@@ -68,19 +89,19 @@ def generate_mst(edge_list):
     mst = nx.minimum_spanning_tree(G)
     return list(mst.edges(data=True))
 
-#def mst_to_newick(mst_edges, leaf_names):
-#    connections = {name: [] for name in leaf_names}
-#    for u, v, data in mst_edges:
-#        connections[u].append((v, data['weight']))
-#        connections[v].append((u, data['weight']))
-#    def build_newick(node, parent=None):
-#        children = [n for n, _ in connections[node] if n != parent]
-#        if not children:
-#            return node
-#        subtrees = [build_newick(child, node) + ":%f" % connections[node][i][1] for i, child in enumerate(children)]
-#        return "(" + ",".join(subtrees) + ")" + node
-#    root = leaf_names[0]
-#    return build_newick(root) + ";"
+def mst_to_newick(mst_edges, leaf_names):
+    connections = {name: [] for name in leaf_names}
+    for u, v, data in mst_edges:
+        connections[u].append((v, data['weight']))
+        connections[v].append((u, data['weight']))
+    def build_newick(node, parent=None):
+        children = [n for n, _ in connections[node] if n != parent]
+        if not children:
+            return node
+        subtrees = [build_newick(child, node) + ":%f" % connections[node][i][1] for i, child in enumerate(children)]
+        return "(" + ",".join(subtrees) + ")" + node
+    root = leaf_names[0]
+    return build_newick(root) + ";"
 
 def generate_hc_tree(diff_matrix):
     sym_diff_matrix = diff_matrix.copy()
@@ -143,12 +164,12 @@ def generate_mst_files(args):
         for u, v, data in mst_edges:
             f.write(f"{u},{v},{data['weight']}\n")
     print(f"MST edge list has been written to {mst_csv_output_path}")
-#    leaf_names = list(diff_matrix.index)
-#    newick_str = mst_to_newick(mst_edges, leaf_names)
-#    mst_newick_output_path = os.path.join(args.output, "mst.newick")
-#    with open(mst_newick_output_path, 'w') as f:
-#        f.write(newick_str)
-#    print(f"Minimum Spanning Tree in Newick format has been written to {mst_newick_output_path}")
+    leaf_names = list(diff_matrix.index)
+    newick_str = mst_to_newick(mst_edges, leaf_names)
+    mst_newick_output_path = os.path.join(args.output, "mst.newick")
+    with open(mst_newick_output_path, 'w') as f:
+        f.write(newick_str)
+    print(f"Minimum Spanning Tree in Newick format has been written to {mst_newick_output_path}")
 
 def generate_hc_tree_file(args):
     diff_matrix = pd.read_csv(args.matrix, index_col=0)
@@ -199,12 +220,12 @@ def run_full_pipeline(args):
                 f.write(f"{u},{v},{data['weight']}\n")
         print(f"MST edge list has been written to {mst_csv_output_path}")
 
-#        leaf_names = list(diff_matrix.index)
-#        newick_str = mst_to_newick(mst_edges, leaf_names)
-#        mst_newick_output_path = os.path.join(args.output, "mst.newick")
-#        with open(mst_newick_output_path, 'w') as f:
-#            f.write(newick_str)
-#        print(f"Minimum Spanning Tree in Newick format has been written to {mst_newick_output_path}")
+        leaf_names = list(diff_matrix.index)
+        newick_str = mst_to_newick(mst_edges, leaf_names)
+        mst_newick_output_path = os.path.join(args.output, "mst.newick")
+        with open(mst_newick_output_path, 'w') as f:
+            f.write(newick_str)
+        print(f"Minimum Spanning Tree in Newick format has been written to {mst_newick_output_path}")
 
     if args.tree in ['hc', 'both']:
         hc_tree = generate_hc_tree(diff_matrix)
@@ -290,12 +311,12 @@ def join_json_files(input_dirs, output_dir, generate_matrix_bool=False, generate
                     f.write(f"{u},{v},{data['weight']}\n")
             print(f"Combined MST edge list has been written to {mst_csv_output_path}")
 
-#            leaf_names = list(combined_diff_matrix.index)
-#            newick_str = mst_to_newick(mst_edges, leaf_names)
-#            mst_newick_output_path = os.path.join(output_dir, "combined_mst.newick")
-#            with open(mst_newick_output_path, 'w') as f:
-#                f.write(newick_str)
-#            print(f"Combined Minimum Spanning Tree in Newick format has been written to {mst_newick_output_path}")
+            leaf_names = list(combined_diff_matrix.index)
+            newick_str = mst_to_newick(mst_edges, leaf_names)
+            mst_newick_output_path = os.path.join(output_dir, "combined_mst.newick")
+            with open(mst_newick_output_path, 'w') as f:
+                f.write(newick_str)
+            print(f"Combined Minimum Spanning Tree in Newick format has been written to {mst_newick_output_path}")
 
 
 
