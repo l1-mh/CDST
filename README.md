@@ -106,7 +106,7 @@ If you have a genome assembly (FASTA format), you need to predict CDS sequences 
 
 Run the following command to predict CDS from an assembly file:
 ```
-prodigal -i assembly.fasta -d cds_output.ff
+prodigal -i assembly.fasta -d cds_output.ffn
 ```
 The resulting cds_output.ffn file can be directly used as input for CDST.
 
