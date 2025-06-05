@@ -48,27 +48,27 @@ CDST provides multiple subcommands for different analysis steps.
 
 1. Generate JSON database of MD5 Hashes from CDS FASTA Files:
 ```
-python cdst.py generate -i sample_cds/*.ffn -o output/
+cdst.py generate -i sample_cds/*.ffn -o output/
 ```
 
 2. Compute Distance Matrices:
 ```
-python cdst.py matrix -j output/md5_hashes.json -o output/
+cdst.py matrix -j output/md5_hashes.json -o output/
 ```
 
 3. Generate Minimum Spanning Tree (MST):
 ```
-python cdst.py mst -m output/difference_matrix.csv -o output/
+cdst.py mst -m output/difference_matrix.csv -o output/
 ```
 
 4. (Optional) Generate Hierarchical Clustering Tree:
 ```
-python cdst.py hc -m output/difference_matrix.csv -o output/
+cdst.py hc -m output/difference_matrix.csv -o output/
 ```
 
 ### Or Run the Full Pipeline Above:
 ```
-python cdst.py run -i sample_cds/*.ffn -o output/ -T both
+cdst.py run -i sample_cds/*.ffn -o output/ -T both
 ```
 
 ### Merge Databases:
