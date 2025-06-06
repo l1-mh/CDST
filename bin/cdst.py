@@ -1,5 +1,16 @@
 #!/usr/bin/env python
 
+# ============================================
+# Version: v0.1.1
+# Changelog:
+# - Reinstate MST Newick output for compatibility with tree visualizers (e.g., GrapeTree)
+# - Refactor: calculate_difference_matrix now returns a symmetric matrix by default
+# - Optimization: generate_edge_list now assumes symmetry and only iterates over upper triangle
+# ============================================
+
+__version__ = "0.1.1"
+
+
 import hashlib
 import argparse
 import json
@@ -460,6 +471,7 @@ def test_new_samples(args):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Process FASTA files and generate various outputs.")
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     generate_parser = subparsers.add_parser('generate', help='Generate MD5 hashes from FASTA files')
