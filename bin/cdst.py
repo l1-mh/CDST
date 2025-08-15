@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 
 # ============================================
-# Version: v0.2.1
+# Version: v0.2.0
 # Changelog:
 # - Add CDS length filtering (default: keep CDS length >= 201 nt)
 # - CLI: new option --min-cds-len/-L for subcommands that read FASTA
 # ============================================
 
-__version__ = "0.2.1"
+__version__ = "0.2.0"
 
 import hashlib
 import argparse
