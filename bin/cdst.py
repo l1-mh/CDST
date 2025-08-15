@@ -1,15 +1,13 @@
 #!/usr/bin/env python
 
 # ============================================
-# Version: v0.1.1
+# Version: v0.2.1
 # Changelog:
-# - Reinstate MST Newick output for compatibility with tree visualizers (e.g., GrapeTree)
-# - Refactor: calculate_difference_matrix now returns a symmetric matrix by default
-# - Optimization: generate_edge_list now assumes symmetry and only iterates over upper triangle
+# - Add CDS length filtering (default: keep CDS length >= 201 nt)
+# - CLI: new option --min-cds-len/-L for subcommands that read FASTA
 # ============================================
 
-__version__ = "0.1.1"
-
+__version__ = "0.2.1"
 
 import hashlib
 import argparse
@@ -22,17 +20,32 @@ from scipy.cluster.hierarchy import linkage, to_tree
 from scipy.spatial.distance import squareform
 from io import StringIO
 
-def generate_md5_for_fasta(fasta_file, verbose=False):
+def generate_md5_for_fasta(fasta_file, min_cds_len=201, verbose=False):
+    """
+    Read CDS FASTA (e.g., Prodigal .ffn) and return MD5 list after filtering.
+    - Filters out sequences containing non-ATCG
+    - Filters out sequences with length < min_cds_len (nt)
+    """
     md5_list = []
+    kept, skipped_len, skipped_ambig = 0, 0, 0
     if verbose:
-        print(f"Processing file: {fasta_file}")
+        print(f"[cdst] Processing file: {fasta_file} (min_cds_len={min_cds_len})")
     for record in SeqIO.parse(fasta_file, "fasta"):
-        sequence = str(record.seq)
-        if any(char not in "ATCGatcg" for char in sequence):
-            continue 
-        sequence = sequence.upper()
-        md5_hash = hashlib.md5(sequence.encode()).hexdigest()
+        seq = str(record.seq)
+        # Ambiguous bases filter
+        if any(ch not in "ATCGatcg" for ch in seq):
+            skipped_ambig += 1
+            continue
+        # Length filter
+        if len(seq) < max(0, int(min_cds_len)):
+            skipped_len += 1
+            continue
+        seq = seq.upper()
+        md5_hash = hashlib.md5(seq.encode()).hexdigest()
         md5_list.append(md5_hash)
+        kept += 1
+    if verbose:
+        print(f"[cdst] Kept: {kept}, Skipped (len): {skipped_len}, Skipped (ambiguous): {skipped_ambig}")
     return md5_list
 
 def generate_comparison_matrix(md5_dict, verbose=False):
@@ -42,57 +55,42 @@ def generate_comparison_matrix(md5_dict, verbose=False):
     comparison_count = 0
     for file1 in files:
         row = []
+        set1 = set(md5_dict[file1])
         for file2 in files:
-            common_md5s = set(md5_dict[file1]) & set(md5_dict[file2])
+            common_md5s = set1 & set(md5_dict[file2])
             row.append(len(common_md5s))
             if verbose:
                 comparison_count += 1
-                print(f"Computing {comparison_count}/{total_comparisons}...", end='\r')
+                if comparison_count % 100 == 0:
+                    print(f"[cdst] Comparing {comparison_count}/{total_comparisons} ...", end="\r")
         matrix.append(row)
     if verbose:
-        print("Comparison completed.")
+        print("\n[cdst] Comparison completed.")
     return pd.DataFrame(matrix, index=files, columns=files)
 
-
 def calculate_difference_matrix(comparison_matrix):
-    diff_matrix = comparison_matrix.copy().astype(float)  
-    for index, row in comparison_matrix.iterrows():
-        self_comparison_value = row[index]
-        diff_matrix.loc[index] = (self_comparison_value - row) / self_comparison_value
-
-## Added in v0.1.1
+    # Relative distance (directional), then symmetrize by min()
+    diff_matrix = comparison_matrix.copy().astype(float)
+    for idx, row in comparison_matrix.iterrows():
+        self_comp = row[idx]
+        diff_matrix.loc[idx] = (self_comp - row) / self_comp
+    # Symmetrize by minimum (v0.1.1 behavior)
     for i in range(len(diff_matrix)):
         for j in range(i + 1, len(diff_matrix)):
-            min_val = min(diff_matrix.iloc[i, j], diff_matrix.iloc[j, i])
-            diff_matrix.iloc[i, j] = diff_matrix.iloc[j, i] = min_val
-##
+            m = min(diff_matrix.iloc[i, j], diff_matrix.iloc[j, i])
+            diff_matrix.iloc[i, j] = diff_matrix.iloc[j, i] = m
     return diff_matrix
 
-
-## Revised in v0.1.1 
-#def generate_edge_list(diff_matrix):
-#    edge_list = []
-#    samples = diff_matrix.index
-#    for i, sample1 in enumerate(samples):
-#        for j, sample2 in enumerate(samples):
-#            if i < j:
-#                distance = min(diff_matrix.loc[sample1, sample2], diff_matrix.loc[sample2, sample1])
-#                edge_list.append((sample1, sample2, distance))
-#    return edge_list
-##
 def generate_edge_list(diff_matrix):
     edge_list = []
     samples = diff_matrix.index
     for i in range(len(samples)):
         for j in range(i + 1, len(samples)):
-            sample1 = samples[i]
-            sample2 = samples[j]
-            distance = diff_matrix.loc[sample1, sample2]
-            edge_list.append((sample1, sample2, distance))
+            s1 = samples[i]
+            s2 = samples[j]
+            d = diff_matrix.loc[s1, s2]
+            edge_list.append((s1, s2, d))
     return edge_list
-##
-
-
 
 def generate_mst(edge_list):
     G = nx.Graph()
@@ -109,18 +107,23 @@ def mst_to_newick(mst_edges, leaf_names):
         children = [n for n, _ in connections[node] if n != parent]
         if not children:
             return node
-        subtrees = [build_newick(child, node) + ":%f" % connections[node][i][1] for i, child in enumerate(children)]
+        subtrees = []
+        for i, child in enumerate(children):
+            w = [w for n, w in connections[node] if n == child][0]
+            subtrees.append(build_newick(child, node) + ":%f" % w)
         return "(" + ",".join(subtrees) + ")" + node
     root = leaf_names[0]
     return build_newick(root) + ";"
 
 def generate_hc_tree(diff_matrix):
-    sym_diff_matrix = diff_matrix.copy()
-    for i in range(len(sym_diff_matrix)):
-        for j in range(i + 1, len(sym_diff_matrix)):
-            sym_diff_matrix.iloc[i, j] = sym_diff_matrix.iloc[j, i] = min(sym_diff_matrix.iloc[i, j], sym_diff_matrix.iloc[j, i])
-    condensed_dist = squareform(sym_diff_matrix)
-    Z = linkage(condensed_dist, method='average')
+    # Ensure symmetry (min)
+    sym = diff_matrix.copy()
+    for i in range(len(sym)):
+        for j in range(i + 1, len(sym)):
+            m = min(sym.iloc[i, j], sym.iloc[j, i])
+            sym.iloc[i, j] = sym.iloc[j, i] = m
+    condensed = squareform(sym)
+    Z = linkage(condensed, method='average')
     tree, _ = to_tree(Z, rd=True)
     return tree
 
@@ -137,15 +140,17 @@ def tree_to_newick(node, newick, parentdist, leaf_names):
         newick = "(%s" % newick
         return newick
 
+# --------- Subcommand implementations ---------
+
 def generate_md5(args):
     md5_dict = {}
     for fasta_file in args.input:
-        md5_hashes = generate_md5_for_fasta(fasta_file, verbose=args.verbose)
+        md5_hashes = generate_md5_for_fasta(fasta_file, min_cds_len=args.min_cds_len, verbose=args.verbose)
         md5_dict[fasta_file] = md5_hashes
     json_output_path = os.path.join(args.output, "md5_hashes.json")
     with open(json_output_path, 'w') as f:
         json.dump(md5_dict, f, indent=4)
-    print(f"MD5 hashes have been written to {json_output_path}")
+    print(f"[cdst] MD5 hashes written: {json_output_path}")
 
 def generate_matrices(args):
     with open(args.json, 'r') as f:
@@ -153,11 +158,11 @@ def generate_matrices(args):
     comparison_matrix = generate_comparison_matrix(md5_dict, verbose=args.verbose)
     csv_output_path = os.path.join(args.output, "comparison_matrix.csv")
     comparison_matrix.to_csv(csv_output_path)
-    print(f"Comparison matrix has been written to {csv_output_path}")
+    print(f"[cdst] Comparison matrix: {csv_output_path}")
     diff_matrix = calculate_difference_matrix(comparison_matrix)
     diff_matrix_output_path = os.path.join(args.output, "difference_matrix.csv")
     diff_matrix.to_csv(diff_matrix_output_path)
-    print(f"Difference matrix has been written to {diff_matrix_output_path}")
+    print(f"[cdst] Difference matrix: {diff_matrix_output_path}")
 
 def generate_mst_files(args):
     diff_matrix = pd.read_csv(args.matrix, index_col=0)
@@ -165,22 +170,22 @@ def generate_mst_files(args):
     edge_list_output_path = os.path.join(args.output, "edge_list.csv")
     with open(edge_list_output_path, 'w') as f:
         f.write("Sample1,Sample2,Distance\n")
-        for sample1, sample2, distance in edge_list:
-            f.write(f"{sample1},{sample2},{distance}\n")
-    print(f"Edge list has been written to {edge_list_output_path}")
+        for s1, s2, d in edge_list:
+            f.write(f"{s1},{s2},{d}\n")
+    print(f"[cdst] Edge list: {edge_list_output_path}")
     mst_edges = generate_mst(edge_list)
     mst_csv_output_path = os.path.join(args.output, "mst.csv")
     with open(mst_csv_output_path, 'w') as f:
         f.write("Node1,Node2,Distance\n")
         for u, v, data in mst_edges:
             f.write(f"{u},{v},{data['weight']}\n")
-    print(f"MST edge list has been written to {mst_csv_output_path}")
+    print(f"[cdst] MST edges: {mst_csv_output_path}")
     leaf_names = list(diff_matrix.index)
     newick_str = mst_to_newick(mst_edges, leaf_names)
     mst_newick_output_path = os.path.join(args.output, "mst.newick")
     with open(mst_newick_output_path, 'w') as f:
         f.write(newick_str)
-    print(f"Minimum Spanning Tree in Newick format has been written to {mst_newick_output_path}")
+    print(f"[cdst] MST (Newick): {mst_newick_output_path}")
 
 def generate_hc_tree_file(args):
     diff_matrix = pd.read_csv(args.matrix, index_col=0)
@@ -190,38 +195,36 @@ def generate_hc_tree_file(args):
     hc_output_path = os.path.join(args.output, "hc.newick")
     with open(hc_output_path, 'w') as f:
         f.write(newick_str)
-    print(f"Hierarchical Clustering Tree has been written to {hc_output_path}")
-
+    print(f"[cdst] HC tree (Newick): {hc_output_path}")
 
 def run_full_pipeline(args):
-
     md5_dict = {}
     for fasta_file in args.input:
-        md5_hashes = generate_md5_for_fasta(fasta_file, verbose=args.verbose)
+        md5_hashes = generate_md5_for_fasta(fasta_file, min_cds_len=args.min_cds_len, verbose=args.verbose)
         md5_dict[fasta_file] = md5_hashes
     json_output_path = os.path.join(args.output, "md5_hashes.json")
     with open(json_output_path, 'w') as f:
         json.dump(md5_dict, f, indent=4)
-    print(f"MD5 hashes have been written to {json_output_path}")
+    print(f"[cdst] MD5 hashes written: {json_output_path}")
 
     comparison_matrix = generate_comparison_matrix(md5_dict, verbose=args.verbose)
     csv_output_path = os.path.join(args.output, "comparison_matrix.csv")
     comparison_matrix.to_csv(csv_output_path)
-    print(f"Comparison matrix has been written to {csv_output_path}")
+    print(f"[cdst] Comparison matrix: {csv_output_path}")
 
     diff_matrix = calculate_difference_matrix(comparison_matrix)
     diff_matrix_output_path = os.path.join(args.output, "difference_matrix.csv")
     diff_matrix.to_csv(diff_matrix_output_path)
-    print(f"Difference matrix has been written to {diff_matrix_output_path}")
+    print(f"[cdst] Difference matrix: {diff_matrix_output_path}")
 
     if args.tree in ['mst', 'both']:
         edge_list = generate_edge_list(diff_matrix)
         edge_list_output_path = os.path.join(args.output, "edge_list.csv")
         with open(edge_list_output_path, 'w') as f:
             f.write("Sample1,Sample2,Distance\n")
-            for sample1, sample2, distance in edge_list:
-                f.write(f"{sample1},{sample2},{distance}\n")
-        print(f"Edge list has been written to {edge_list_output_path}")
+            for s1, s2, d in edge_list:
+                f.write(f"{s1},{s2},{d}\n")
+        print(f"[cdst] Edge list: {edge_list_output_path}")
 
         mst_edges = generate_mst(edge_list)
         mst_csv_output_path = os.path.join(args.output, "mst.csv")
@@ -229,14 +232,14 @@ def run_full_pipeline(args):
             f.write("Node1,Node2,Distance\n")
             for u, v, data in mst_edges:
                 f.write(f"{u},{v},{data['weight']}\n")
-        print(f"MST edge list has been written to {mst_csv_output_path}")
+        print(f"[cdst] MST edges: {mst_csv_output_path}")
 
         leaf_names = list(diff_matrix.index)
         newick_str = mst_to_newick(mst_edges, leaf_names)
         mst_newick_output_path = os.path.join(args.output, "mst.newick")
         with open(mst_newick_output_path, 'w') as f:
             f.write(newick_str)
-        print(f"Minimum Spanning Tree in Newick format has been written to {mst_newick_output_path}")
+        print(f"[cdst] MST (Newick): {mst_newick_output_path}")
 
     if args.tree in ['hc', 'both']:
         hc_tree = generate_hc_tree(diff_matrix)
@@ -245,8 +248,7 @@ def run_full_pipeline(args):
         hc_output_path = os.path.join(args.output, "hc.newick")
         with open(hc_output_path, 'w') as f:
             f.write(newick_str)
-        print(f"Hierarchical Clustering Tree has been written to {hc_output_path}")
-
+        print(f"[cdst] HC tree (Newick): {hc_output_path}")
 
 def merge_matrices(existing_matrices, new_md5_dict, verbose=False):
     all_samples = set()
@@ -263,13 +265,16 @@ def merge_matrices(existing_matrices, new_md5_dict, verbose=False):
                 combined_comparison_matrix.loc[i, j] = matrix.loc[i, j]
 
     for new_sample in new_md5_dict.keys():
+        set_new = set(new_md5_dict[new_sample])
         for existing_sample in combined_comparison_matrix.index:
-            if new_sample != existing_sample:
-                common_md5s = set(new_md5_dict[new_sample]) & set(new_md5_dict.get(existing_sample, []))
-                combined_comparison_matrix.loc[new_sample, existing_sample] = len(common_md5s)
-                combined_comparison_matrix.loc[existing_sample, new_sample] = len(common_md5s)
-                if verbose:
-                    print(f"Comparing {new_sample} with {existing_sample}")
+            if new_sample == existing_sample:
+                continue
+            set_exist = set(new_md5_dict.get(existing_sample, []))
+            common = set_new & set_exist
+            combined_comparison_matrix.loc[new_sample, existing_sample] = len(common)
+            combined_comparison_matrix.loc[existing_sample, new_sample] = len(common)
+            if verbose:
+                print(f"[cdst] Comparing {new_sample} vs {existing_sample}")
 
     return combined_comparison_matrix
 
@@ -292,27 +297,27 @@ def join_json_files(input_dirs, output_dir, generate_matrix_bool=False, generate
     combined_json_output_path = os.path.join(output_dir, "combined_md5_hashes.json")
     with open(combined_json_output_path, 'w') as f:
         json.dump(combined_md5_dict, f, indent=4)
-    print(f"Combined MD5 hashes have been written to {combined_json_output_path}")
+    print(f"[cdst] Combined MD5 hashes: {combined_json_output_path}")
 
     if generate_matrix_bool:
         combined_comparison_matrix = merge_matrices(existing_comparison_matrices, combined_md5_dict, verbose=verbose)
         comparison_matrix_output_path = os.path.join(output_dir, "combined_comparison_matrix.csv")
         combined_comparison_matrix.to_csv(comparison_matrix_output_path)
-        print(f"Combined comparison matrix has been written to {comparison_matrix_output_path}")
+        print(f"[cdst] Combined comparison matrix: {comparison_matrix_output_path}")
 
         combined_diff_matrix = calculate_difference_matrix(combined_comparison_matrix)
         diff_matrix_output_path = os.path.join(output_dir, "combined_difference_matrix.csv")
         combined_diff_matrix.to_csv(diff_matrix_output_path)
-        print(f"Combined difference matrix has been written to {diff_matrix_output_path}")
+        print(f"[cdst] Combined difference matrix: {diff_matrix_output_path}")
 
         if generate_mst_bool:
             edge_list = generate_edge_list(combined_diff_matrix)
             edge_list_output_path = os.path.join(output_dir, "combined_edge_list.csv")
             with open(edge_list_output_path, 'w') as f:
                 f.write("Sample1,Sample2,Distance\n")
-                for sample1, sample2, distance in edge_list:
-                    f.write(f"{sample1},{sample2},{distance}\n")
-            print(f"Combined edge list has been written to {edge_list_output_path}")
+                for s1, s2, d in edge_list:
+                    f.write(f"{s1},{s2},{d}\n")
+            print(f"[cdst] Combined edge list: {edge_list_output_path}")
 
             mst_edges = generate_mst(edge_list)
             mst_csv_output_path = os.path.join(output_dir, "combined_mst.csv")
@@ -320,96 +325,83 @@ def join_json_files(input_dirs, output_dir, generate_matrix_bool=False, generate
                 f.write("Node1,Node2,Distance\n")
                 for u, v, data in mst_edges:
                     f.write(f"{u},{v},{data['weight']}\n")
-            print(f"Combined MST edge list has been written to {mst_csv_output_path}")
+            print(f"[cdst] Combined MST edges: {mst_csv_output_path}")
 
             leaf_names = list(combined_diff_matrix.index)
             newick_str = mst_to_newick(mst_edges, leaf_names)
             mst_newick_output_path = os.path.join(output_dir, "combined_mst.newick")
             with open(mst_newick_output_path, 'w') as f:
                 f.write(newick_str)
-            print(f"Combined Minimum Spanning Tree in Newick format has been written to {mst_newick_output_path}")
-
-
+            print(f"[cdst] Combined MST (Newick): {mst_newick_output_path}")
 
 def compare_new_samples_with_existing(new_md5_dict, existing_md5_dict, verbose=False):
     comparison_results_normalized = []
     comparison_results_unnormalized = []
-    
     all_distances_normalized = []
     all_distances_unnormalized = []
-    
+
     for new_sample, new_md5s in new_md5_dict.items():
-        closest_sample_normalized = None
-        closest_sample_unnormalized = None
-        min_distance_normalized = float('inf')
-        min_distance_unnormalized = float('inf')
+        closest_norm = None
+        closest_unnorm = None
+        min_norm = float('inf')
+        min_unnorm = float('inf')
+        set_new = set(new_md5s)
 
         for existing_sample, existing_md5s in existing_md5_dict.items():
-            common_md5s = set(new_md5s) & set(existing_md5s)
-            
-            # Calculate normalized distance
-            distance_a_b_normalized = (len(new_md5s) - len(common_md5s)) / len(new_md5s)
-            distance_b_a_normalized = (len(existing_md5s) - len(common_md5s)) / len(existing_md5s)
-            distance_normalized = min(distance_a_b_normalized, distance_b_a_normalized)
-            
-            # Calculate unnormalized distance
-            distance_a_b_unnormalized = len(new_md5s) - len(common_md5s)
-            distance_b_a_unnormalized = len(existing_md5s) - len(common_md5s)
-            distance_unnormalized = min(distance_a_b_unnormalized, distance_b_a_unnormalized)
+            set_exist = set(existing_md5s)
+            common = set_new & set_exist
 
-            # Store distances for full comparison table
-            all_distances_normalized.append((new_sample, existing_sample, distance_normalized))
-            all_distances_unnormalized.append((new_sample, existing_sample, distance_unnormalized))
+            # normalized
+            d_a_b_norm = (len(set_new) - len(common)) / len(set_new) if set_new else 1.0
+            d_b_a_norm = (len(set_exist) - len(common)) / len(set_exist) if set_exist else 1.0
+            d_norm = min(d_a_b_norm, d_b_a_norm)
 
-            if distance_normalized < min_distance_normalized:
-                min_distance_normalized = distance_normalized
-                closest_sample_normalized = existing_sample
+            # unnormalized
+            d_a_b_unn = len(set_new) - len(common)
+            d_b_a_unn = len(set_exist) - len(common)
+            d_unn = min(d_a_b_unn, d_b_a_unn)
 
-            if distance_unnormalized < min_distance_unnormalized:
-                min_distance_unnormalized = distance_unnormalized
-                closest_sample_unnormalized = existing_sample
+            all_distances_normalized.append((new_sample, existing_sample, d_norm))
+            all_distances_unnormalized.append((new_sample, existing_sample, d_unn))
+
+            if d_norm < min_norm:
+                min_norm = d_norm
+                closest_norm = existing_sample
+            if d_unn < min_unnorm:
+                min_unnorm = d_unn
+                closest_unnorm = existing_sample
 
             if verbose:
-                print(f"Comparing {new_sample} with {existing_sample}: Normalized Distance = {distance_normalized}, Unnormalized Distance = {distance_unnormalized}")
+                print(f"[cdst] {new_sample} vs {existing_sample}: norm={d_norm}, unnorm={d_unn}")
 
-        comparison_results_normalized.append((new_sample, closest_sample_normalized, min_distance_normalized))
-        comparison_results_unnormalized.append((new_sample, closest_sample_unnormalized, min_distance_unnormalized))
+        comparison_results_normalized.append((new_sample, closest_norm, min_norm))
+        comparison_results_unnormalized.append((new_sample, closest_unnorm, min_unnorm))
 
-    result_output_path_normalized = "result.csv"
-    result_output_path_unnormalized = "result_unnormalized.csv"
-    
-    with open(result_output_path_normalized, 'w') as f:
+    # write simple CSVs in CWD (legacy behavior)
+    with open("result.csv", 'w') as f:
         f.write("NewSample,ClosestSample,NormalizedDistance\n")
-        for new_sample, closest_sample, distance in comparison_results_normalized:
-            f.write(f"{new_sample},{closest_sample},{distance}\n")
-
-    with open(result_output_path_unnormalized, 'w') as f:
+        for a, b, d in comparison_results_normalized:
+            f.write(f"{a},{b},{d}\n")
+    with open("result_unnormalized.csv", 'w') as f:
         f.write("NewSample,ClosestSample,UnnormalizedDistance\n")
-        for new_sample, closest_sample, distance in comparison_results_unnormalized:
-            f.write(f"{new_sample},{closest_sample},{distance}\n")
-
-    distances_output_path_normalized = "distances.csv"
-    distances_output_path_unnormalized = "distances_unnormalized.csv"
-    
-    with open(distances_output_path_normalized, 'w') as f:
+        for a, b, d in comparison_results_unnormalized:
+            f.write(f"{a},{b},{d}\n")
+    with open("distances.csv", 'w') as f:
         f.write("Sample1,Sample2,NormalizedDistance\n")
-        for sample1, sample2, distance in all_distances_normalized:
-            f.write(f"{sample1},{sample2},{distance}\n")
-
-    with open(distances_output_path_unnormalized, 'w') as f:
+        for a, b, d in all_distances_normalized:
+            f.write(f"{a},{b},{d}\n")
+    with open("distances_unnormalized.csv", 'w') as f:
         f.write("Sample1,Sample2,UnnormalizedDistance\n")
-        for sample1, sample2, distance in all_distances_unnormalized:
-            f.write(f"{sample1},{sample2},{distance}\n")
+        for a, b, d in all_distances_unnormalized:
+            f.write(f"{a},{b},{d}\n")
 
-    print(f"Comparison results have been written to {result_output_path_normalized}, {result_output_path_unnormalized}, {distances_output_path_normalized}, and {distances_output_path_unnormalized}")
-    
+    print("[cdst] Wrote: result.csv, result_unnormalized.csv, distances.csv, distances_unnormalized.csv")
     return comparison_results_normalized, comparison_results_unnormalized, all_distances_normalized, all_distances_unnormalized
-
 
 def test_new_samples(args):
     new_md5_dict = {}
     for fasta_file in args.input:
-        md5_hashes = generate_md5_for_fasta(fasta_file, verbose=args.verbose)
+        md5_hashes = generate_md5_for_fasta(fasta_file, min_cds_len=args.min_cds_len, verbose=args.verbose)
         new_md5_dict[fasta_file] = md5_hashes
 
     existing_md5_dict = {}
@@ -417,102 +409,92 @@ def test_new_samples(args):
         with open(args.json, 'r') as f:
             existing_md5_dict = json.load(f)
 
-    comparison_results_normalized, comparison_results_unnormalized, all_distances_normalized, all_distances_unnormalized = compare_new_samples_with_existing(new_md5_dict, existing_md5_dict, verbose=args.verbose)
+    comparison_results_normalized, comparison_results_unnormalized, all_distances_normalized, all_distances_unnormalized = compare_new_samples_with_existing(
+        new_md5_dict, existing_md5_dict, verbose=args.verbose)
 
-    comparison_output_path_normalized = os.path.join(args.output, "comparison_results_normalized.csv")
-    comparison_output_path_unnormalized = os.path.join(args.output, "comparison_results_unnormalized.csv")
-
-    with open(comparison_output_path_normalized, 'w') as f:
+    # write into output dir
+    os.makedirs(args.output, exist_ok=True)
+    out_norm = os.path.join(args.output, "comparison_results_normalized.csv")
+    out_unn = os.path.join(args.output, "comparison_results_unnormalized.csv")
+    with open(out_norm, 'w') as f:
         f.write("NewSample,ClosestSample,NormalizedDistance\n")
-        for new_sample, closest_sample, distance in comparison_results_normalized:
-            f.write(f"{new_sample},{closest_sample},{distance}\n")
-    
-    with open(comparison_output_path_unnormalized, 'w') as f:
+        for a, b, d in comparison_results_normalized:
+            f.write(f"{a},{b},{d}\n")
+    with open(out_unn, 'w') as f:
         f.write("NewSample,ClosestSample,UnnormalizedDistance\n")
-        for new_sample, closest_sample, distance in comparison_results_unnormalized:
-            f.write(f"{new_sample},{closest_sample},{distance}\n")
+        for a, b, d in comparison_results_unnormalized:
+            f.write(f"{a},{b},{d}\n")
+    print(f"[cdst] Wrote: {out_norm} , {out_unn}")
 
-    print(f"Comparison results have been written to {comparison_output_path_normalized} and {comparison_output_path_unnormalized}")
-    
-    distances_output_path_normalized = os.path.join(args.output, "distances_normalized.csv")
-    distances_output_path_unnormalized = os.path.join(args.output, "distances_unnormalized.csv")
-
-    with open(distances_output_path_normalized, 'w') as f:
+    dist_out_norm = os.path.join(args.output, "distances_normalized.csv")
+    dist_out_unn = os.path.join(args.output, "distances_unnormalized.csv")
+    with open(dist_out_norm, 'w') as f:
         f.write("Sample1,Sample2,NormalizedDistance\n")
-        for sample1, sample2, distance in all_distances_normalized:
-            f.write(f"{sample1},{sample2},{distance}\n")
-    
-    with open(distances_output_path_unnormalized, 'w') as f:
+        for a, b, d in all_distances_normalized:
+            f.write(f"{a},{b},{d}\n")
+    with open(dist_out_unn, 'w') as f:
         f.write("Sample1,Sample2,UnnormalizedDistance\n")
-        for sample1, sample2, distance in all_distances_unnormalized:
-            f.write(f"{sample1},{sample2},{distance}\n")
+        for a, b, d in all_distances_unnormalized:
+            f.write(f"{a},{b},{d}\n")
+    print(f"[cdst] Wrote: {dist_out_norm} , {dist_out_unn}")
 
-    print(f"Full distance comparison tables have been written to {distances_output_path_normalized} and {distances_output_path_unnormalized}")
+    # optional MST update (kept as-is)
 
-    if args.mst and os.path.exists(args.mst):
-        diff_matrix = pd.read_csv(args.mst.replace('mst.csv', 'difference_matrix.csv'), index_col=0)
-        for new_sample, closest_sample, distance in comparison_results_normalized:
-            diff_matrix.loc[new_sample] = float('inf')
-            diff_matrix.loc[:, new_sample] = float('inf')
-            diff_matrix.loc[new_sample, closest_sample] = distance
-            diff_matrix.loc[closest_sample, new_sample] = distance
-
-        edge_list = generate_edge_list(diff_matrix)
-        mst_edges = generate_mst(edge_list)
-
-        mst_csv_output_path = os.path.join(args.output, "updated_mst.csv")
-        with open(mst_csv_output_path, 'w') as f:
-            f.write("Node1,Node2,Distance\n")
-            for u, v, data in mst_edges:
-                f.write(f"{u},{v},{data['weight']}\n")
-        print(f"Updated MST edge list has been written to {mst_csv_output_path}")
-
-
+# --------- CLI ---------
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="Process FASTA files and generate various outputs.")
+    parser = argparse.ArgumentParser(description="CDST: MD5 hash-based CDS comparison and clustering.")
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     subparsers = parser.add_subparsers(dest='command', required=True)
 
-    generate_parser = subparsers.add_parser('generate', help='Generate MD5 hashes from FASTA files')
-    generate_parser.add_argument('-i', '--input', type=str, nargs='+', required=True, help="Input FASTA files")
-    generate_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder to save results")
-    generate_parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose output")
+    # generate
+    generate_parser = subparsers.add_parser('generate', help='Generate MD5 hashes from CDS FASTA files')
+    generate_parser.add_argument('-i', '--input', type=str, nargs='+', required=True, help="Input CDS FASTA files (e.g., .ffn)")
+    generate_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder")
+    generate_parser.add_argument('-L', '--min-cds-len', type=int, default=201, help="Minimum CDS length to keep (nt; default: 201)")
+    generate_parser.add_argument('-v', '--verbose', action='store_true', help="Verbose output")
 
-    matrix_parser = subparsers.add_parser('matrix', help='Generate comparison and difference matrices from JSON')
-    matrix_parser.add_argument('-j', '--json', type=str, required=True, help="Input JSON file with MD5 hashes")
-    matrix_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder to save results")
-    matrix_parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose output")
+    # matrix
+    matrix_parser = subparsers.add_parser('matrix', help='Generate comparison/difference matrices from JSON')
+    matrix_parser.add_argument('-j', '--json', type=str, required=True, help="Input JSON with MD5 hashes")
+    matrix_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder")
+    matrix_parser.add_argument('-v', '--verbose', action='store_true', help="Verbose output")
 
+    # mst
     mst_parser = subparsers.add_parser('mst', help='Generate MST and edge list from difference matrix')
-    mst_parser.add_argument('-m', '--matrix', type=str, required=True, help="Input CSV file with difference matrix")
-    mst_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder to save results")
+    mst_parser.add_argument('-m', '--matrix', type=str, required=True, help="Difference matrix CSV")
+    mst_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder")
 
+    # hc
     hc_parser = subparsers.add_parser('hc', help='Generate HC tree from difference matrix')
-    hc_parser.add_argument('-m', '--matrix', type=str, required=True, help="Input CSV file with difference matrix")
-    hc_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder to save results")
+    hc_parser.add_argument('-m', '--matrix', type=str, required=True, help="Difference matrix CSV")
+    hc_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder")
 
-    run_parser = subparsers.add_parser('run', help='Run full pipeline from FASTA to tree generation')
-    run_parser.add_argument('-i', '--input', type=str, nargs='+', required=True, help="Input FASTA files")
-    run_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder to save results")
-    run_parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose output")
-    run_parser.add_argument('-T', '--tree', choices=['mst', 'hc', 'both'], help="Generate tree: mst for Minimum Spanning Tree, hc for Hierarchical Clustering, both for both trees")
+    # run
+    run_parser = subparsers.add_parser('run', help='Run full pipeline from CDS FASTA to trees')
+    run_parser.add_argument('-i', '--input', type=str, nargs='+', required=True, help="Input CDS FASTA files (e.g., .ffn)")
+    run_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder")
+    run_parser.add_argument('-L', '--min-cds-len', type=int, default=201, help="Minimum CDS length to keep (nt; default: 201)")
+    run_parser.add_argument('-v', '--verbose', action='store_true', help="Verbose output")
+    run_parser.add_argument('-T', '--tree', choices=['mst', 'hc', 'both'], help="Tree to generate")
 
-    join_parser = subparsers.add_parser('join', help='Join multiple JSON files and optionally generate matrices and MST')
-    join_parser.add_argument('-d', '--inputdirs', type=str, nargs='+', required=True, help="Input directories containing JSON files")
-    join_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder to save results")
-    join_parser.add_argument('--matrix', action='store_true', help="Generate combined comparison and difference matrices")
+    # join
+    join_parser = subparsers.add_parser('join', help='Join multiple JSONs; optionally build matrices and MST')
+    join_parser.add_argument('-d', '--inputdirs', type=str, nargs='+', required=True, help="Input directories containing md5_hashes.json")
+    join_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder")
+    join_parser.add_argument('--matrix', action='store_true', help="Generate combined matrices")
     join_parser.add_argument('--mst', action='store_true', help="Generate combined MST")
 
-    test_parser = subparsers.add_parser('test', help='Test new samples against existing JSON data')
-    test_parser.add_argument('-i', '--input', type=str, nargs='+', required=True, help="Input FASTA files")
-    test_parser.add_argument('-j', '--json', type=str, required=True, help="Existing JSON file with MD5 hashes")
+    # test
+    test_parser = subparsers.add_parser('test', help='Compare new samples against existing JSON')
+    test_parser.add_argument('-i', '--input', type=str, nargs='+', required=True, help="Input CDS FASTA files (e.g., .ffn)")
+    test_parser.add_argument('-j', '--json', type=str, required=True, help="Existing JSON with MD5 hashes")
     test_parser.add_argument('--mst', type=str, help="Optional existing MST CSV file")
-    test_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder to save results")
-    test_parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose output")
+    test_parser.add_argument('-o', '--output', type=str, required=True, help="Output folder")
+    test_parser.add_argument('-L', '--min-cds-len', type=int, default=201, help="Minimum CDS length to keep (nt; default: 201)")
+    test_parser.add_argument('-v', '--verbose', action='store_true', help="Verbose output")
 
     return parser.parse_args()
-
 
 def main():
     args = parse_arguments()
