@@ -21,7 +21,7 @@ Install them using:
 ```
 pip install biopython pandas networkx scipy
 ```
-## VTested Environment
+## Tested Environment
 
 We tested the pipeline in the following environment:
 
