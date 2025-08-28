@@ -21,6 +21,20 @@ Install them using:
 ```
 pip install biopython pandas networkx scipy
 ```
+## VTested Environment
+
+We tested the pipeline in the following environment:
+
+- Python 3.12
+- Biopython 1.85
+- pandas 2.2.2
+- SciPy 1.13.1
+- scikit-learn 1.5.1
+- networkx 3.3
+- matplotlib 3.9.x
+- joblib 1.4.x
+
+Other versions may also work, but have not been systematically tested.  
 
 ## INSTALLATION
 
@@ -44,6 +58,11 @@ python cdst.py --help
 
 CDST provides multiple subcommands for different analysis steps.
 
+### Run the Full Pipeline Above:
+```
+cdst.py run -i sample_cds/*.ffn -o output/ -T both
+```
+
 ### Generate the Distance Matrix, MST, and Hierarchical Clusters from CDS Sequences:
 
 1. Generate JSON database of MD5 Hashes from CDS FASTA Files:
@@ -64,11 +83,6 @@ cdst.py mst -m output/difference_matrix.csv -o output/
 4. (Optional) Generate Hierarchical Clustering Tree:
 ```
 cdst.py hc -m output/difference_matrix.csv -o output/
-```
-
-### Or Run the Full Pipeline Above:
-```
-cdst.py run -i sample_cds/*.ffn -o output/ -T both
 ```
 
 ### Merge Databases:
