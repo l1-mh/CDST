@@ -1,2 +1,20 @@
+# Core metadata
 include README.md
 include LICENSE
+
+# Dependency / environment files
+include environment.yml
+
+# Source code
+recursive-include src/cdst *
+
+# Extra standalone scripts
+
+# Tests
+
+# Exclude cache and temporary files
+global-exclude *.py[cod]
+global-exclude __pycache__/*
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude *.dylib
