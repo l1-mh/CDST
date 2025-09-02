@@ -40,7 +40,7 @@ Other versions may also work, but have not been systematically tested.
 
 ### Option 1: Install via pip (recommended)
 
-The easiest way to use CDST is to install the packaged version directly from PyPI:
+The easiest way to use CDST is to install the packaged (along with the basically required dependencies) version directly from PyPI:
 
     pip install cdst-genome
 
