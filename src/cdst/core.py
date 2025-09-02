@@ -1,5 +1,3 @@
-# src/cdst/core.py
-
 """
 Core functions for CDST (CoDing Sequence Typer).
 Implements MD5-based hashing of CDS sequences, distance matrix generation,
