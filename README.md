@@ -38,21 +38,33 @@ Other versions may also work, but have not been systematically tested.
 
 ## INSTALLATION
 
-Clone this repository and navigate into the project folder:
-```
-git clone https://github.com/l1-mh/cdst.git
-cd cdst
-```
+### Option 1: Install via pip (recommended)
 
-Make the script executable:
-```
-chmod +x cdst.py
-```
+The easiest way to use CDST is to install the packaged version directly from PyPI:
 
-Alternatively, you can run it directly using Python:
-```
-python cdst.py --help
-```
+    pip install cdst-genome
+
+After installation, the `cdst` command will be available system-wide:
+
+    cdst --help
+
+### Option 2: Run the stand-alone script
+
+If you cannot install packages (e.g. restricted environments), you can use the single-file script version.
+
+1. Download CDST/scripts/cdst.py
+
+2. Make the script executable:
+
+    chmod +x cdst.py
+
+Or run it directly with Python:
+
+    python cdst.py --help
+
+For quick prototyping or one-off analyses, the stand-alone script is convenient.  
+For reproducible and large-scale analyses, the pip-installed version is recommended.
+
 
 ## USAGE
 
