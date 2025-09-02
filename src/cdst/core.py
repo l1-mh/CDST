@@ -16,6 +16,78 @@ from Bio import SeqIO
 from scipy.cluster.hierarchy import linkage, to_tree
 from scipy.spatial.distance import squareform
 
+# src/cdst/core.py  (append at the end)
+
+def run_full_pipeline(fasta_files, output_dir, min_cds_len=201, tree_mode="both", verbose=False):
+    """
+    Run the full CDST pipeline:
+    1. Generate MD5 hashes from FASTA files
+    2. Create comparison and difference matrices
+    3. Optionally generate MST and/or HC trees
+
+    Parameters
+    ----------
+    fasta_files : list of str
+        List of input CDS FASTA files (.ffn)
+    output_dir : str
+        Directory to write results
+    min_cds_len : int
+        Minimum CDS length (default=201)
+    tree_mode : str
+        One of {"mst", "hc", "both"}
+    verbose : bool
+        Verbose logging
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Step 1: generate md5
+    md5_dict = {}
+    for fasta_file in fasta_files:
+        md5_dict[fasta_file] = generate_md5_for_fasta(
+            fasta_file, min_cds_len=min_cds_len, verbose=verbose
+        )
+    json_output_path = os.path.join(output_dir, "md5_hashes.json")
+    with open(json_output_path, "w") as f:
+        json.dump(md5_dict, f, indent=4)
+    print(f"[cdst] MD5 hashes written to {json_output_path}")
+
+    # Step 2: comparison + difference matrices
+    comparison_matrix = generate_comparison_matrix(md5_dict, verbose=verbose)
+    comp_path = os.path.join(output_dir, "comparison_matrix.csv")
+    comparison_matrix.to_csv(comp_path)
+    print(f"[cdst] Comparison matrix written to {comp_path}")
+
+    diff_matrix = calculate_difference_matrix(comparison_matrix)
+    diff_path = os.path.join(output_dir, "difference_matrix.csv")
+    diff_matrix.to_csv(diff_path)
+    print(f"[cdst] Difference matrix written to {diff_path}")
+
+    # Step 3: MST
+    if tree_mode in ("mst", "both"):
+        edge_list = generate_edge_list(diff_matrix)
+        mst_edges = generate_mst(edge_list)
+        mst_csv = os.path.join(output_dir, "mst.csv")
+        with open(mst_csv, "w") as f:
+            f.write("Node1,Node2,Distance\n")
+            for u, v, data in mst_edges:
+                f.write(f"{u},{v},{data['weight']}\n")
+        print(f"[cdst] MST edges written to {mst_csv}")
+        newick_str = mst_to_newick(mst_edges, list(diff_matrix.index))
+        mst_newick = os.path.join(output_dir, "mst.newick")
+        with open(mst_newick, "w") as f:
+            f.write(newick_str)
+        print(f"[cdst] MST Newick tree written to {mst_newick}")
+
+    # Step 4: HC
+    if tree_mode in ("hc", "both"):
+        hc_tree = generate_hc_tree(diff_matrix)
+        leaf_names = list(diff_matrix.index)
+        newick_str = tree_to_newick(hc_tree, "", hc_tree.dist, leaf_names)
+        hc_newick = os.path.join(output_dir, "hc.newick")
+        with open(hc_newick, "w") as f:
+            f.write(newick_str)
+        print(f"[cdst] HC Newick tree written to {hc_newick}")
+
 
 def generate_md5_for_fasta(fasta_file: str, min_cds_len: int = 201, verbose: bool = False) -> List[str]:
     """
