@@ -14,6 +14,17 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    
+    # Subcommand: run (full pipeline)
+    run = subparsers.add_parser("run", help="Run full CDST pipeline.")
+    run.add_argument("-i", "--input", nargs="+", required=True, help="Input CDS FASTA files")
+    run.add_argument("-o", "--output", required=True, help="Output directory")
+    run.add_argument("-L", "--min-cds-len", type=int, default=201, help="Minimum CDS length")
+    run.add_argument("-T", "--tree", choices=["mst", "hc", "both"], default="both",
+                     help="Tree type to generate (default: both)")
+    run.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+
+
     # Subcommand: generate
     gen = subparsers.add_parser("generate", help="Generate MD5 hash lists from FASTA files.")
     gen.add_argument("-i", "--input", nargs="+", required=True, help="Input CDS FASTA files")
@@ -91,3 +102,13 @@ def main():
         with open(hc_newick, "w") as f:
             f.write(newick_str)
         print(f"[cdst] HC Newick tree written to {hc_newick}")
+        
+    elif args.command == "run":
+        core.run_full_pipeline(
+            args.input,
+            args.output,
+            min_cds_len=args.min_cds_len,
+            tree_mode=args.tree,
+            verbose=args.verbose,
+        )
+
