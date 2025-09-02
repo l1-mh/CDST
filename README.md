@@ -133,11 +133,11 @@ The resulting cds_output.ffn file can be directly used as input for CDST.
 ## OUTPUT FILES
 
 Depending on the commands used, the following files will be generated:
-- md5_hashes.json → Stores MD5 hashes for CDS sequences.
-- comparison_matrix.csv → Number of shared hashes between samples.
-- difference_matrix.csv → Distance matrix based on hash differences.
-- edge_list.csv → Edge list representation of pairwise distances.
-- mst.csv → Minimum Spanning Tree (MST) edge list.
-- hc.newick → Hierarchical Clustering tree in Newick format.
-- comparison_results.csv → Closest matches (for new samples comparisons only).
+- md5_hashes.json:        Stores MD5 hashes for CDS sequences.
+- comparison_matrix.csv:  Number of shared hashes between samples.
+- difference_matrix.csv:  Distance matrix based on hash differences.
+- edge_list.csv:          Edge list representation of pairwise distances.
+- mst.csv:                Minimum Spanning Tree (MST) edge list.
+- hc.newick:              Hierarchical Clustering tree in Newick format.
+- comparison_results.csv: Closest matches (for new samples comparisons only).
 
