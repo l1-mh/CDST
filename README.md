@@ -153,3 +153,7 @@ Depending on the commands used, the following files will be generated:
 - hc.newick:              Hierarchical Clustering tree in Newick format.
 - comparison_results.csv: Closest matches (for new samples comparisons only).
 
+
+## Citation
+Li, M., Fanning, S., Zhou, Z., & Bai, L. (2025). CoDing Sequence Typer (CDST): a fast, simple, decentralized and interoperable solution for bacterial genomic typing and clustering. Microbial genomics, 11(10), 001518. https://doi.org/10.1099/mgen.0.001518
+
